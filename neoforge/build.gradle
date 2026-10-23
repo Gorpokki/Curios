@@ -46,6 +46,20 @@ runs {
     }
 }
 
+// Backpack slot sync GameTests, run only by .github/workflows/backpack-slot-sync-tests.yml with
+// -Pbackpack_libs=<dir of the pinned Sophisticated Backpacks and Core jars>. Never in the Curios jar.
+if (project.hasProperty('backpack_libs')) {
+    def backpackLibs = fileTree(project.property('backpack_libs')) { include '*.jar' }
+    sourceSets.test.java.srcDir 'src/backpackTest/java'
+    sourceSets.test.resources.srcDir 'src/backpackTest/resources'
+    dependencies {
+        testCompileOnly backpackLibs
+    }
+    runs.gameTestServer.dependencies {
+        runtime project.dependencies.create(backpackLibs)
+    }
+}
+
 repositories {
     maven {
         name = "CurseMaven"
