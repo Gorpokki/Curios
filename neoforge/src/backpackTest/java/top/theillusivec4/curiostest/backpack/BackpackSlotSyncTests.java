@@ -115,7 +115,7 @@ public class BackpackSlotSyncTests {
     }
   };
 
-  /** Test A: the server has one more charm slot than the client, then the real Curios menu opens. */
+  /** Test A: the server has one more charm slot than the client, then Curios opens its menu. */
   @GameTest(template = "empty", timeoutTicks = 200)
   public static void charmMismatchMenuWritesClientBack(GameTestHelper helper) {
     ServerPlayer server = player(helper, "sync-a-server");
@@ -130,7 +130,8 @@ public class BackpackSlotSyncTests {
       int clientCharm = slots(client, "charm");
       record.put("charm_slots", serverCharm + " server, " + clientCharm + " client");
       check(serverCharm == clientCharm + 1, "fixture charm slots: " + record.get("charm_slots"));
-      check(sameBackpack(back(server), back(client)), "fixture back[0] differs before Curios opens");
+      check(sameBackpack(back(server), back(client)),
+          "fixture back[0] differs before Curios opens");
       sent(server);
       CPacketOpenCurios request =
           roundTrip(helper, CPacketOpenCurios.STREAM_CODEC, new CPacketOpenCurios(ItemStack.EMPTY));
@@ -141,9 +142,11 @@ public class BackpackSlotSyncTests {
           .filter(ClientboundOpenScreenPacket.class::isInstance)
           .map(ClientboundOpenScreenPacket.class::cast).findFirst()
           .orElseThrow(() -> new GameTestAssertException("server opened no Curios menu"));
-      ClientboundContainerSetContentPacket contents = contents(helper, packets, open.getContainerId())
+      ClientboundContainerSetContentPacket contents =
+          contents(helper, packets, open.getContainerId())
           .orElseThrow(() -> new GameTestAssertException("server sent no Curios menu contents"));
-      AbstractContainerMenu menu = open.getType().create(open.getContainerId(), client.getInventory());
+      AbstractContainerMenu menu =
+          open.getType().create(open.getContainerId(), client.getInventory());
       client.containerMenu = menu;
       List<String> serverSlots = curioSlots(server.containerMenu);
       List<String> clientSlots = curioSlots(menu);
@@ -258,7 +261,8 @@ public class BackpackSlotSyncTests {
         return "server opened no backpack menu";
       }
       AdvancedOpenScreenPayload screen = open.get();
-      AbstractContainerMenu menu = screen.menuType().create(screen.windowId(), client.getInventory(),
+      AbstractContainerMenu menu = screen.menuType().create(screen.windowId(),
+          client.getInventory(),
           buffer(helper, Unpooled.wrappedBuffer(screen.additionalData())));
       client.containerMenu = menu;
       contents(helper, packets, screen.windowId()).ifPresent(
@@ -323,7 +327,8 @@ public class BackpackSlotSyncTests {
     CommonListenerCookie cookie =
         CommonListenerCookie.createInitial(new GameProfile(UUID.randomUUID(), name), false);
     ServerPlayer player =
-        new ServerPlayer(server, helper.getLevel(), cookie.gameProfile(), cookie.clientInformation());
+        new ServerPlayer(server, helper.getLevel(), cookie.gameProfile(),
+            cookie.clientInformation());
     Connection connection = new Connection(PacketFlow.SERVERBOUND);
     new EmbeddedChannel(connection);
     connection.channel().attr(ChannelAttributes.ADHOC_CHANNELS).set(EVERY_CHANNEL);
@@ -332,7 +337,7 @@ public class BackpackSlotSyncTests {
     return player;
   }
 
-  /** Iron backpack in back[0] with paper 1..36 in its slots 0..35; player slots hold sticks 1..36. */
+  /** Iron backpack in back[0] with paper 1..36 in slots 0..35; player slots hold sticks 1..36. */
   private static void fixture(ServerPlayer server, ServerPlayer client) {
     ItemStack backpack = new ItemStack(BuiltInRegistries.ITEM.get(
         ResourceLocation.fromNamespaceAndPath("sophisticatedbackpacks", "iron_backpack")));
@@ -378,7 +383,8 @@ public class BackpackSlotSyncTests {
   private static List<SPacketSyncStack> backPackets(ServerPlayer player, List<Object> packets) {
     return payloads(packets, SPacketSyncStack.class).stream()
         .filter(p -> p.entityId() == player.getId() && "back".equals(p.curioId())
-            && p.slotId() == 0 && p.handlerType() == SPacketSyncStack.HandlerType.EQUIPMENT.ordinal())
+            && p.slotId() == 0
+            && p.handlerType() == SPacketSyncStack.HandlerType.EQUIPMENT.ordinal())
         .toList();
   }
 
