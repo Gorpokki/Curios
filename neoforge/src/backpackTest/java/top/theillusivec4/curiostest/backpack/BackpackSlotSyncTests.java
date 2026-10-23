@@ -124,7 +124,7 @@ public class BackpackSlotSyncTests {
     // The client never gets this modifier: it stays at the base three charm slots.
     curios(server).addTransientSlotModifier("charm", CHARM, 1,
         AttributeModifier.Operation.ADD_VALUE);
-    helper.runAfterDelay(WARMUP_TICKS, () -> {
+    step(helper, "A", WARMUP_TICKS, () -> {
       Map<String, Object> record = new LinkedHashMap<>();
       int serverCharm = slots(server, "charm");
       int clientCharm = slots(client, "charm");
@@ -149,7 +149,14 @@ public class BackpackSlotSyncTests {
       List<String> clientSlots = curioSlots(menu);
       record.put("server_menu", serverSlots);
       record.put("client_menu", clientSlots);
-      menu.initializeContents(contents.getStateId(), contents.getItems(), contents.getCarriedItem());
+      record.put("contents_error", "none");
+
+      try {
+        menu.initializeContents(contents.getStateId(), contents.getItems(),
+            contents.getCarriedItem());
+      } catch (RuntimeException e) {
+        record.put("contents_error", e.toString());
+      }
       int position = clientSlots.stream().filter(s -> s.endsWith(":back[0]")).findFirst()
           .map(s -> Integer.parseInt(s.substring(0, s.indexOf(':')))).orElse(-1);
       record.put("client_back_position", position < 0 ? "none" : position + " carries server "
@@ -172,7 +179,7 @@ public class BackpackSlotSyncTests {
     ServerPlayer server = player(helper, "sync-b-server");
     ServerPlayer client = player(helper, "sync-b-client");
     fixture(server, client);
-    helper.runAfterDelay(WARMUP_TICKS, () -> {
+    step(helper, "B", WARMUP_TICKS, () -> {
       check(sameBackpack(back(server), back(client)), "fixture back[0] differs before hold");
       CompoundTag marker = new CompoundTag();
       marker.putString("curiostest", "sync-b");
@@ -191,7 +198,7 @@ public class BackpackSlotSyncTests {
 
     if (found.isEmpty()) {
       check(ticksLeft > 0, "Curios sent no back[0] packet within " + HOLD_TICKS + " ticks");
-      helper.runAfterDelay(1,
+      step(helper, "B", 1,
           () -> awaitBackPacket(helper, server, client, original, ticksLeft - 1));
       return;
     }
@@ -216,7 +223,7 @@ public class BackpackSlotSyncTests {
     record.put("decoded", describe(decoded.stack()));
     // What CuriosClientPackets.handle(SPacketSyncStack) does on the client.
     handler(client).getStacks().setStackInSlot(decoded.slotId(), decoded.stack().copy());
-    helper.runAfterDelay(2, () -> {
+    step(helper, "B", 2, () -> {
       List<SPacketSyncStack> corrective = backPackets(server, sent(server));
       record.put("corrective_back_packets_in_2_ticks", corrective.size());
 
@@ -273,10 +280,20 @@ public class BackpackSlotSyncTests {
     }
   }
 
-  private static void finish(GameTestHelper helper, String test, Map<String, Object> record,
-                             boolean red, String failure) {
-    record.put("result", red ? "red" : "green");
-    LOG.info("[backpack-slot-sync] test {} {}", test, record);
+  /** Runs a test step after the delay; a step that throws first removes the test's sync players. */
+  private static void step(GameTestHelper helper, String test, int delay, Runnable body) {
+    helper.runAfterDelay(delay, () -> {
+
+      try {
+        body.run();
+      } catch (RuntimeException e) {
+        removeSyncPlayers(helper, test);
+        throw e;
+      }
+    });
+  }
+
+  private static void removeSyncPlayers(GameTestHelper helper, String test) {
 
     for (ServerPlayer player : List.copyOf(helper.getLevel().getServer().getPlayerList()
         .getPlayers())) {
@@ -285,6 +302,13 @@ public class BackpackSlotSyncTests {
         helper.getLevel().getServer().getPlayerList().remove(player);
       }
     }
+  }
+
+  private static void finish(GameTestHelper helper, String test, Map<String, Object> record,
+                             boolean red, String failure) {
+    record.put("result", red ? "red" : "green");
+    LOG.info("[backpack-slot-sync] test {} {}", test, record);
+    removeSyncPlayers(helper, test);
 
     if (red) {
       helper.fail("Test " + test + " red: " + failure + "; " + record.get("backpack_open"));
