@@ -1,0 +1,8 @@
+// CurseForgeGradle 1.2+ needs Java 25, newer than Gradle 8.8 runs on. build.gradle asks for '1.+'.
+beforeSettings { settings ->
+    settings.pluginManagement.resolutionStrategy.eachPlugin {
+        if (requested.id.id == 'net.darkhax.curseforgegradle') {
+            useVersion '1.1.28'
+        }
+    }
+}
