@@ -54,9 +54,8 @@ if (project.hasProperty('backpack_libs')) {
     sourceSets.test.resources.srcDir 'src/backpackTest/resources'
     dependencies {
         testCompileOnly backpackLibs
-    }
-    runs.gameTestServer.dependencies {
-        runtime project.dependencies.create(backpackLibs)
+        // Same path as the JEI runtime jar, so FML loads these jars as mods.
+        runtimeOnly backpackLibs
     }
 }
 
