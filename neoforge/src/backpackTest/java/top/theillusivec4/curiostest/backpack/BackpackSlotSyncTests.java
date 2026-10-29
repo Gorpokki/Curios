@@ -45,18 +45,22 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.network.protocol.game.ClientboundBundlePacket;
 import net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket;
 import net.minecraft.network.protocol.game.ClientboundOpenScreenPacket;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.CustomData;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.OnDatapackSyncEvent;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 import net.neoforged.neoforge.network.connection.ConnectionType;
@@ -74,13 +78,18 @@ import top.theillusivec4.curios.CuriosConstants;
 import top.theillusivec4.curios.api.CuriosApi;
 import top.theillusivec4.curios.api.type.capability.ICuriosItemHandler;
 import top.theillusivec4.curios.api.type.inventory.ICurioStacksHandler;
+import top.theillusivec4.curios.api.type.inventory.IDynamicStackHandler;
+import top.theillusivec4.curios.common.inventory.CurioStacksHandler;
 import top.theillusivec4.curios.common.inventory.CurioSlot;
 import top.theillusivec4.curios.common.network.client.CPacketOpenCurios;
 import top.theillusivec4.curios.common.network.server.CuriosServerPayloadHandler;
+import top.theillusivec4.curios.common.network.server.sync.SPacketSyncCurios;
+import top.theillusivec4.curios.common.network.server.sync.SPacketSyncModifiers;
 import top.theillusivec4.curios.common.network.server.sync.SPacketSyncStack;
+import top.theillusivec4.curiostest.common.CuriosTestRegistry;
 
 /**
- * Curios slot sync tests A and B, with an equipped Sophisticated Backpacks backpack.
+ * Curios slot sync tests A and B, with an equipped Sophisticated Backpacks backpack, and test C.
  *
  * <p>Each test has a server player and a second player that stands in for that player's client:
  * the client player gets only what the server would send it, decoded through the real codecs.
@@ -96,6 +105,7 @@ public class BackpackSlotSyncTests {
   private static final int MARKERS = 36;
   private static final int WARMUP_TICKS = 20;
   private static final int HOLD_TICKS = 40;
+  private static final int CLIENT_TICKS = 5;
 
   // A mock connection negotiates no channels, so this accepts every payload id.
   private static final Set<ResourceLocation> EVERY_CHANNEL = new AbstractSet<>() {
@@ -192,6 +202,154 @@ public class BackpackSlotSyncTests {
       handler(server).getStacks().setStackInSlot(0, original);
       awaitBackPacket(helper, server, client, original, HOLD_TICKS);
     });
+  }
+
+  /**
+   * Test C: knuckles in hands[0] add two necklace slots while the game runs. The client stand-in
+   * gets every Curios packet, decoded, and runs the client side of the Curios tick. It must keep
+   * the server's necklace slots and items after the equip, a relog and a datapack reload.
+   */
+  @GameTest(template = "empty", timeoutTicks = 200)
+  public static void runtimeSlotsReachClient(GameTestHelper helper) {
+    ServerPlayer server = player(helper, "sync-c-server");
+    ServerPlayer client = standIn(helper, "sync-c-client");
+    Map<String, Object> record = new LinkedHashMap<>();
+    List<String> errors = new ArrayList<>();
+    pump(helper, server, client, errors, CLIENT_TICKS, () -> {
+      curios(server).getStacksHandler("hands").orElseThrow().getStacks()
+          .setStackInSlot(0, new ItemStack(CuriosTestRegistry.KNUCKLES.get()));
+      step(helper, "C", 1, () -> {
+        IDynamicStackHandler necklace =
+            curios(server).getStacksHandler("necklace").orElseThrow().getStacks();
+        check(necklace.getSlots() == 3, "fixture necklace slots on server: " + necklace.getSlots());
+
+        for (int i = 0; i < necklace.getSlots(); i++) {
+          necklace.setStackInSlot(i, new ItemStack(Items.DIAMOND, i + 1));
+        }
+        pump(helper, server, client, errors, CLIENT_TICKS, () -> {
+          record.put("equip", compare(server, client, errors));
+          // Relog: the server saves the player, then loads it again on a new connection.
+          GameProfile profile = server.getGameProfile();
+          helper.getLevel().getServer().getPlayerList().remove(server);
+          ServerPlayer relogged = player(helper, profile);
+          ServerPlayer relogClient = standIn(helper, "sync-c-client");
+          pump(helper, relogged, relogClient, errors, CLIENT_TICKS, () -> {
+            record.put("relog", compare(relogged, relogClient, errors));
+            NeoForge.EVENT_BUS.post(
+                new OnDatapackSyncEvent(helper.getLevel().getServer().getPlayerList(), null));
+            pump(helper, relogged, relogClient, errors, CLIENT_TICKS, () -> {
+              record.put("reload", compare(relogged, relogClient, errors));
+              record.put("client_errors", errors.isEmpty() ? "none" : errors);
+              boolean red = !errors.isEmpty() || record.values().stream()
+                  .anyMatch(v -> v instanceof String s && s.startsWith("differs"));
+              finish(helper, "C", record, red, "client stand-in lost runtime necklace slots: "
+                  + record);
+            });
+          });
+        });
+      });
+    });
+  }
+
+  /** Feeds the server's Curios packets to the stand-in and runs its client tick, once a tick. */
+  private static void pump(GameTestHelper helper, ServerPlayer server, ServerPlayer client,
+                           List<String> errors, int ticks, Runnable then) {
+    step(helper, "C", 1, () -> {
+      replay(helper, server, client, sent(server), errors);
+      // The client side of CuriosEventHandler.tick: the server-only equip work does not run.
+      client.tickCount++;
+      curios(client).clearCachedSlotModifiers();
+      curios(client).getCurios().values().forEach(ICurioStacksHandler::getSlots);
+
+      if (ticks > 1) {
+        pump(helper, server, client, errors, ticks - 1, then);
+      } else {
+        then.run();
+      }
+    });
+  }
+
+  /** What CuriosClientPackets does with each Curios packet for this player, after decoding. */
+  private static void replay(GameTestHelper helper, ServerPlayer server, ServerPlayer client,
+                             List<Object> packets, List<String> errors) {
+
+    for (Object payload : payloads(packets, CustomPacketPayload.class)) {
+
+      if (payload instanceof SPacketSyncCurios p && p.entityId == server.getId()) {
+        SPacketSyncCurios data = roundTrip(helper, SPacketSyncCurios.STREAM_CODEC, p);
+        ICuriosItemHandler handler = curios(client);
+        Map<String, ICurioStacksHandler> stacks = new LinkedHashMap<>();
+        data.map.forEach((id, tag) -> {
+          CurioStacksHandler stacksHandler = new CurioStacksHandler(handler, id);
+          stacksHandler.applySyncTag(tag);
+          stacks.put(id, stacksHandler);
+        });
+        handler.setCurios(stacks);
+      } else if (payload instanceof SPacketSyncModifiers p && p.entityId == server.getId()) {
+        SPacketSyncModifiers data = roundTrip(helper, SPacketSyncModifiers.STREAM_CODEC, p);
+        Map<String, ICurioStacksHandler> curios = curios(client).getCurios();
+        data.updates.forEach((id, tag) -> {
+
+          if (curios.get(id) != null) {
+            curios.get(id).applySyncTag(tag);
+          }
+        });
+      } else if (payload instanceof SPacketSyncStack p && p.entityId() == server.getId()) {
+        SPacketSyncStack data = roundTrip(helper, SPacketSyncStack.STREAM_CODEC, p);
+        curios(client).getStacksHandler(data.curioId()).ifPresent(stacksHandler -> {
+          IDynamicStackHandler target = SPacketSyncStack.HandlerType.fromValue(data.handlerType())
+              == SPacketSyncStack.HandlerType.COSMETIC ? stacksHandler.getCosmeticStacks()
+              : stacksHandler.getStacks();
+
+          try {
+            target.setStackInSlot(data.slotId(), data.stack().copy());
+          } catch (RuntimeException e) {
+            errors.add(data.curioId() + ": " + e.getMessage());
+          }
+        });
+      }
+    }
+  }
+
+  /** "same ..." when the stand-in has the server's necklace slots and items, else "differs ...". */
+  private static String compare(ServerPlayer server, ServerPlayer client, List<String> errors) {
+    IDynamicStackHandler serverNecklace =
+        curios(server).getStacksHandler("necklace").orElseThrow().getStacks();
+    IDynamicStackHandler clientNecklace =
+        curios(client).getStacksHandler("necklace").orElseThrow().getStacks();
+    List<String> serverItems = new ArrayList<>();
+    List<String> clientItems = new ArrayList<>();
+
+    for (int i = 0; i < serverNecklace.getSlots(); i++) {
+      serverItems.add(describe(serverNecklace.getStackInSlot(i)));
+    }
+
+    for (int i = 0; i < clientNecklace.getSlots(); i++) {
+      clientItems.add(describe(clientNecklace.getStackInSlot(i)));
+    }
+    String state = "necklace server " + serverItems + ", client " + clientItems + ", errors "
+        + errors.size();
+    return (serverItems.equals(clientItems) ? "same " : "differs ") + state;
+  }
+
+  /** A player for a relog: same profile, new connection; PlayerList loads its saved data. */
+  private static ServerPlayer player(GameTestHelper helper, GameProfile profile) {
+    MinecraftServer server = helper.getLevel().getServer();
+    CommonListenerCookie cookie = CommonListenerCookie.createInitial(profile, false);
+    ServerPlayer player =
+        new ServerPlayer(server, helper.getLevel(), profile, cookie.clientInformation());
+    Connection connection = new Connection(PacketFlow.SERVERBOUND);
+    new EmbeddedChannel(connection);
+    connection.channel().attr(ChannelAttributes.ADHOC_CHANNELS).set(EVERY_CHANNEL);
+    ChannelAttributes.setConnectionType(connection, ConnectionType.NEOFORGE);
+    server.getPlayerList().placeNewPlayer(connection, player, cookie);
+    return player;
+  }
+
+  /** A client stand-in: never added to the level, so no server tick runs on it. */
+  private static ServerPlayer standIn(GameTestHelper helper, String name) {
+    return new ServerPlayer(helper.getLevel().getServer(), helper.getLevel(),
+        new GameProfile(UUID.randomUUID(), name), ClientInformation.createDefault());
   }
 
   private static void awaitBackPacket(GameTestHelper helper, ServerPlayer server,
