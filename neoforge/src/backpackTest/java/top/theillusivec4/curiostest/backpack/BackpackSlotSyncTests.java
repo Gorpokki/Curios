@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTest;
@@ -45,20 +46,25 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
-import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.network.protocol.game.ClientboundBundlePacket;
 import net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket;
 import net.minecraft.network.protocol.game.ClientboundOpenScreenPacket;
+import net.minecraft.network.protocol.game.ClientboundRespawnPacket;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.network.CommonListenerCookie;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.portal.DimensionTransition;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.OnDatapackSyncEvent;
 import net.neoforged.neoforge.gametest.GameTestHolder;
@@ -206,97 +212,141 @@ public class BackpackSlotSyncTests {
 
   /**
    * Test C: knuckles in hands[0] add two necklace slots while the game runs. The client stand-in
-   * gets every Curios packet, decoded, and runs the client side of the Curios tick. It must keep
-   * the server's necklace slots and items after the equip, a relog and a datapack reload.
+   * gets every Curios packet, decoded, and runs the client side of the Curios tick; a respawn
+   * packet gives it a new entity, as on a real client. After each phase it must have the server's
+   * necklace slots and items.
    */
-  @GameTest(template = "empty", timeoutTicks = 200)
+  @GameTest(template = "empty", timeoutTicks = 400)
   public static void runtimeSlotsReachClient(GameTestHelper helper) {
-    ServerPlayer server = player(helper, "sync-c-server");
-    ServerPlayer client = standIn(helper, "sync-c-client");
-    Map<String, Object> record = new LinkedHashMap<>();
-    List<String> errors = new ArrayList<>();
-    pump(helper, server, client, errors, CLIENT_TICKS, () -> {
-      curios(server).getStacksHandler("hands").orElseThrow().getStacks()
-          .setStackInSlot(0, new ItemStack(CuriosTestRegistry.KNUCKLES.get()));
-      step(helper, "C", 1, () -> {
-        IDynamicStackHandler necklace =
-            curios(server).getStacksHandler("necklace").orElseThrow().getStacks();
-        check(necklace.getSlots() == 3, "fixture necklace slots on server: " + necklace.getSlots());
+    MinecraftServer mc = helper.getLevel().getServer();
+    Sync sync = new Sync(player(helper, "sync-c-server"), standIn(helper));
+    int[] churn = {0};
+    List<Phase> phases = List.of(
+        new Phase("equip", s -> curios(s.server).getStacksHandler("hands").orElseThrow()
+            .getStacks().setStackInSlot(0, new ItemStack(CuriosTestRegistry.KNUCKLES.get()))),
+        new Phase("fill", s -> {
+          IDynamicStackHandler necklace = necklace(s.server);
+          check(necklace.getSlots() == 3, "fixture necklace slots on server: "
+              + necklace.getSlots());
 
-        for (int i = 0; i < necklace.getSlots(); i++) {
-          necklace.setStackInSlot(i, new ItemStack(Items.DIAMOND, i + 1));
-        }
-        pump(helper, server, client, errors, CLIENT_TICKS, () -> {
-          record.put("equip", compare(server, client, errors));
-          // Relog: the server saves the player, then loads it again on a new connection.
-          GameProfile profile = server.getGameProfile();
-          helper.getLevel().getServer().getPlayerList().remove(server);
-          ServerPlayer relogged = player(helper, profile);
-          ServerPlayer relogClient = standIn(helper, "sync-c-client");
-          pump(helper, relogged, relogClient, errors, CLIENT_TICKS, () -> {
-            record.put("relog", compare(relogged, relogClient, errors));
-            NeoForge.EVENT_BUS.post(
-                new OnDatapackSyncEvent(helper.getLevel().getServer().getPlayerList(), null));
-            pump(helper, relogged, relogClient, errors, CLIENT_TICKS, () -> {
-              record.put("reload", compare(relogged, relogClient, errors));
-              record.put("client_errors", errors.isEmpty() ? "none" : errors);
-              boolean red = !errors.isEmpty() || record.values().stream()
-                  .anyMatch(v -> v instanceof String s && s.startsWith("differs"));
-              finish(helper, "C", record, red, "client stand-in lost runtime necklace slots: "
-                  + record);
-            });
-          });
-        });
+          for (int i = 0; i < necklace.getSlots(); i++) {
+            necklace.setStackInSlot(i, new ItemStack(Items.DIAMOND, i + 1));
+          }
+        }),
+        // Item data that changes every tick, as relics do while they charge.
+        new Phase("churn", s -> s.eachTick = () -> {
+          CompoundTag tag = new CompoundTag();
+          tag.putInt("curiostest", ++churn[0]);
+          curios(s.server).getStacksHandler("hands").orElseThrow().getStacks().getStackInSlot(0)
+              .set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+          necklace(s.server).getStackInSlot(2).set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+        }),
+        new Phase("relog", s -> {
+          s.eachTick = () -> { };
+          GameProfile profile = s.server.getGameProfile();
+          mc.getPlayerList().remove(s.server);
+          s.server = player(helper, profile);
+          s.client = standIn(helper);
+        }),
+        new Phase("reload", s -> NeoForge.EVENT_BUS.post(
+            new OnDatapackSyncEvent(mc.getPlayerList(), null))),
+        new Phase("respawn", s -> s.server =
+            mc.getPlayerList().respawn(s.server, false, Entity.RemovalReason.KILLED)),
+        new Phase("dimension", s -> {
+          ServerLevel nether = mc.getLevel(Level.NETHER);
+          check(nether != null, "fixture has no nether level");
+          s.server.changeDimension(new DimensionTransition(nether, s.server.position(),
+              Vec3.ZERO, 0, 0, DimensionTransition.DO_NOTHING));
+        }));
+    runPhases(helper, sync, phases, 0, new LinkedHashMap<>());
+  }
+
+  private static final class Sync {
+    ServerPlayer server;
+    ServerPlayer client;
+    Runnable eachTick = () -> { };
+    final List<String> errors = new ArrayList<>();
+
+    Sync(ServerPlayer server, ServerPlayer client) {
+      this.server = server;
+      this.client = client;
+    }
+  }
+
+  private record Phase(String name, Consumer<Sync> action) {
+  }
+
+  private static void runPhases(GameTestHelper helper, Sync sync, List<Phase> phases, int index,
+                                Map<String, Object> record) {
+
+    if (index == phases.size()) {
+      record.put("client_errors", sync.errors.isEmpty() ? "none" : sync.errors);
+      boolean red = !sync.errors.isEmpty() || record.values().stream()
+          .anyMatch(v -> v instanceof String s && s.startsWith("differs"));
+      finish(helper, "C", record, red, "client stand-in lost runtime necklace slots: " + record);
+      return;
+    }
+    Phase phase = phases.get(index);
+    step(helper, "C", 1, () -> {
+      phase.action().accept(sync);
+      pump(helper, sync, CLIENT_TICKS, () -> {
+        record.put(phase.name(), compare(sync));
+        runPhases(helper, sync, phases, index + 1, record);
       });
     });
   }
 
   /** Feeds the server's Curios packets to the stand-in and runs its client tick, once a tick. */
-  private static void pump(GameTestHelper helper, ServerPlayer server, ServerPlayer client,
-                           List<String> errors, int ticks, Runnable then) {
+  private static void pump(GameTestHelper helper, Sync sync, int ticks, Runnable then) {
     step(helper, "C", 1, () -> {
-      replay(helper, server, client, sent(server), errors);
+      sync.eachTick.run();
+      replay(helper, sync, sent(sync.server));
       // The client side of CuriosEventHandler.tick: the server-only equip work does not run.
-      client.tickCount++;
-      curios(client).clearCachedSlotModifiers();
-      curios(client).getCurios().values().forEach(ICurioStacksHandler::getSlots);
+      sync.client.tickCount++;
+      curios(sync.client).clearCachedSlotModifiers();
+      curios(sync.client).getCurios().values().forEach(ICurioStacksHandler::getSlots);
 
       if (ticks > 1) {
-        pump(helper, server, client, errors, ticks - 1, then);
+        pump(helper, sync, ticks - 1, then);
       } else {
         then.run();
       }
     });
   }
 
-  /** What CuriosClientPackets does with each Curios packet for this player, after decoding. */
-  private static void replay(GameTestHelper helper, ServerPlayer server, ServerPlayer client,
-                             List<Object> packets, List<String> errors) {
+  /** What the client does with each packet for this player, in order, after decoding. */
+  private static void replay(GameTestHelper helper, Sync sync, List<Object> packets) {
+    int id = sync.server.getId();
 
-    for (Object payload : payloads(packets, CustomPacketPayload.class)) {
+    for (Object packet : packets) {
+      Object payload = packet instanceof ClientboundCustomPayloadPacket custom
+          ? custom.payload() : packet;
 
-      if (payload instanceof SPacketSyncCurios p && p.entityId == server.getId()) {
+      if (payload instanceof ClientboundRespawnPacket) {
+        // The client makes a new player entity for a respawn or a dimension change.
+        sync.client = standIn(helper);
+      } else if (payload instanceof SPacketSyncCurios p && p.entityId == id) {
         SPacketSyncCurios data = roundTrip(helper, SPacketSyncCurios.STREAM_CODEC, p);
-        ICuriosItemHandler handler = curios(client);
+        ICuriosItemHandler handler = curios(sync.client);
         Map<String, ICurioStacksHandler> stacks = new LinkedHashMap<>();
-        data.map.forEach((id, tag) -> {
-          CurioStacksHandler stacksHandler = new CurioStacksHandler(handler, id);
+        data.map.forEach((slot, tag) -> {
+          CurioStacksHandler stacksHandler = new CurioStacksHandler(handler, slot);
           stacksHandler.applySyncTag(tag);
-          stacks.put(id, stacksHandler);
+          stacks.put(slot, stacksHandler);
         });
         handler.setCurios(stacks);
-      } else if (payload instanceof SPacketSyncModifiers p && p.entityId == server.getId()) {
+      } else if (payload instanceof SPacketSyncModifiers p && p.entityId == id) {
         SPacketSyncModifiers data = roundTrip(helper, SPacketSyncModifiers.STREAM_CODEC, p);
-        Map<String, ICurioStacksHandler> curios = curios(client).getCurios();
-        data.updates.forEach((id, tag) -> {
+        Map<String, ICurioStacksHandler> curios = curios(sync.client).getCurios();
+        data.updates.forEach((slot, tag) -> {
 
-          if (curios.get(id) != null) {
-            curios.get(id).applySyncTag(tag);
+          if (curios.get(slot) != null) {
+            curios.get(slot).applySyncTag(tag);
           }
         });
-      } else if (payload instanceof SPacketSyncStack p && p.entityId() == server.getId()) {
+      } else if (payload instanceof SPacketSyncStack p && p.entityId() == id) {
         SPacketSyncStack data = roundTrip(helper, SPacketSyncStack.STREAM_CODEC, p);
-        curios(client).getStacksHandler(data.curioId()).ifPresent(stacksHandler -> {
+        curios(sync.client).getStacksHandler(data.curioId()).ifPresent(stacksHandler -> {
           IDynamicStackHandler target = SPacketSyncStack.HandlerType.fromValue(data.handlerType())
               == SPacketSyncStack.HandlerType.COSMETIC ? stacksHandler.getCosmeticStacks()
               : stacksHandler.getStacks();
@@ -304,7 +354,7 @@ public class BackpackSlotSyncTests {
           try {
             target.setStackInSlot(data.slotId(), data.stack().copy());
           } catch (RuntimeException e) {
-            errors.add(data.curioId() + ": " + e.getMessage());
+            sync.errors.add(data.curioId() + ": " + e.getMessage());
           }
         });
       }
@@ -312,13 +362,11 @@ public class BackpackSlotSyncTests {
   }
 
   /** "same ..." when the stand-in has the server's necklace slots and items, else "differs ...". */
-  private static String compare(ServerPlayer server, ServerPlayer client, List<String> errors) {
-    IDynamicStackHandler serverNecklace =
-        curios(server).getStacksHandler("necklace").orElseThrow().getStacks();
-    IDynamicStackHandler clientNecklace =
-        curios(client).getStacksHandler("necklace").orElseThrow().getStacks();
+  private static String compare(Sync sync) {
     List<String> serverItems = new ArrayList<>();
     List<String> clientItems = new ArrayList<>();
+    IDynamicStackHandler serverNecklace = necklace(sync.server);
+    IDynamicStackHandler clientNecklace = necklace(sync.client);
 
     for (int i = 0; i < serverNecklace.getSlots(); i++) {
       serverItems.add(describe(serverNecklace.getStackInSlot(i)));
@@ -327,9 +375,12 @@ public class BackpackSlotSyncTests {
     for (int i = 0; i < clientNecklace.getSlots(); i++) {
       clientItems.add(describe(clientNecklace.getStackInSlot(i)));
     }
-    String state = "necklace server " + serverItems + ", client " + clientItems + ", errors "
-        + errors.size();
-    return (serverItems.equals(clientItems) ? "same " : "differs ") + state;
+    return (serverItems.equals(clientItems) ? "same " : "differs ") + "necklace server "
+        + serverItems + ", client " + clientItems + ", errors " + sync.errors.size();
+  }
+
+  private static IDynamicStackHandler necklace(ServerPlayer player) {
+    return curios(player).getStacksHandler("necklace").orElseThrow().getStacks();
   }
 
   /** A player for a relog: same profile, new connection; PlayerList loads its saved data. */
@@ -347,9 +398,9 @@ public class BackpackSlotSyncTests {
   }
 
   /** A client stand-in: never added to the level, so no server tick runs on it. */
-  private static ServerPlayer standIn(GameTestHelper helper, String name) {
+  private static ServerPlayer standIn(GameTestHelper helper) {
     return new ServerPlayer(helper.getLevel().getServer(), helper.getLevel(),
-        new GameProfile(UUID.randomUUID(), name), ClientInformation.createDefault());
+        new GameProfile(UUID.randomUUID(), "sync-c-client"), ClientInformation.createDefault());
   }
 
   private static void awaitBackPacket(GameTestHelper helper, ServerPlayer server,
