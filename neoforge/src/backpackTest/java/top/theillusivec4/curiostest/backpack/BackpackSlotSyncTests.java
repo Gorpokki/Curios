@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTest;
@@ -74,17 +75,19 @@ import top.theillusivec4.curios.CuriosConstants;
 import top.theillusivec4.curios.api.CuriosApi;
 import top.theillusivec4.curios.api.type.capability.ICuriosItemHandler;
 import top.theillusivec4.curios.api.type.inventory.ICurioStacksHandler;
+import top.theillusivec4.curios.api.type.inventory.IDynamicStackHandler;
 import top.theillusivec4.curios.common.inventory.CurioSlot;
 import top.theillusivec4.curios.common.network.client.CPacketOpenCurios;
 import top.theillusivec4.curios.common.network.server.CuriosServerPayloadHandler;
 import top.theillusivec4.curios.common.network.server.sync.SPacketSyncStack;
 
 /**
- * Curios slot sync tests A and B, with an equipped Sophisticated Backpacks backpack.
+ * Curios slot sync tests A and B, with an equipped Sophisticated Backpacks backpack, and test C,
+ * which checks which thread may change a slot count.
  *
- * <p>Each test has a server player and a second player that stands in for that player's client:
- * the client player gets only what the server would send it, decoded through the real codecs.
- * A test is red when the client's back[0] no longer holds the server's backpack.
+ * <p>Tests A and B each have a server player and a second player that stands in for that player's
+ * client: the client player gets only what the server would send it, decoded through the real
+ * codecs. Test A or B is red when the client's back[0] no longer holds the server's backpack.
  */
 @GameTestHolder(CuriosConstants.MOD_ID)
 @PrefixGameTestTemplate(false)
@@ -241,6 +244,37 @@ public class BackpackSlotSyncTests {
       finish(helper, "B", record, red, "held back[0] packet decoded as " + record.get("decoded")
           + " while server back[0] = " + record.get("server_back") + ", corrective packets: "
           + record.get("corrective_back_packets_in_2_ticks"));
+    });
+  }
+
+  /**
+   * Test C: a charm slot is added, then another thread reads the charm slots before the game
+   * thread does. Mods read curios from worker threads, such as block raycasts. A resize on such a
+   * thread races the game thread's slot sync and can leave a client with fewer slots than the
+   * server, so it then rejects the server's stacks for the missing slots.
+   */
+  @GameTest(template = "empty", timeoutTicks = 100)
+  public static void otherThreadReadKeepsSlotCount(GameTestHelper helper) {
+    ServerPlayer player = player(helper, "sync-c-player");
+
+    step(helper, "C", WARMUP_TICKS, () -> {
+      ICurioStacksHandler charm = curios(player).getStacksHandler("charm").orElseThrow();
+      IDynamicStackHandler stacks = charm.getStacks();
+      int before = charm.getSlots();
+      curios(player).addTransientSlotModifier("charm", CHARM, 1,
+          AttributeModifier.Operation.ADD_VALUE);
+      CompletableFuture.runAsync(charm::getSlots).join();
+      int otherThread = stacks.getSlots();
+      int gameThread = charm.getSlots();
+      Map<String, Object> record = new LinkedHashMap<>();
+      record.put("charm_slots", before + " before, " + otherThread
+          + " after the other thread read, " + gameThread + " after the game thread read");
+      boolean red = otherThread != before || gameThread != before + 1;
+      record.put("result", red ? "red" : "green");
+      LOG.info("[backpack-slot-sync] test C {}", record);
+      removeSyncPlayers(helper, "C");
+      check(!red, "Test C red: charm slots " + record.get("charm_slots"));
+      helper.succeed();
     });
   }
 
