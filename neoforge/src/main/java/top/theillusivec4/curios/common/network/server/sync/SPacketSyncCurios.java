@@ -31,6 +31,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import top.theillusivec4.curios.CuriosConstants;
 import top.theillusivec4.curios.api.type.inventory.ICurioStacksHandler;
+import top.theillusivec4.curios.common.SlotSyncDebug;
 
 public class SPacketSyncCurios implements CustomPacketPayload {
 
@@ -69,6 +70,7 @@ public class SPacketSyncCurios implements CustomPacketPayload {
     this.entityId = entityId;
     this.entrySize = map.size();
     this.map = result;
+    SlotSyncDebug.log("server send sync_curios entity={} {}", entityId, SlotSyncDebug.tags(result));
   }
 
   public SPacketSyncCurios(final FriendlyByteBuf buf) {

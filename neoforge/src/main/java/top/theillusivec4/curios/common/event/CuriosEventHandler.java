@@ -92,6 +92,7 @@ import top.theillusivec4.curios.api.type.inventory.ICurioStacksHandler;
 import top.theillusivec4.curios.api.type.inventory.IDynamicStackHandler;
 import top.theillusivec4.curios.common.CuriosConfig;
 import top.theillusivec4.curios.common.CuriosRegistry;
+import top.theillusivec4.curios.common.SlotSyncDebug;
 import top.theillusivec4.curios.common.data.CuriosEntityManager;
 import top.theillusivec4.curios.common.data.CuriosSlotManager;
 import top.theillusivec4.curios.common.inventory.container.CuriosContainer;
@@ -620,6 +621,12 @@ public class CuriosEventHandler {
       CuriosApi.getCuriosInventory(livingEntity)
           .ifPresent(
               handler -> {
+
+                if (livingEntity instanceof Player && livingEntity.tickCount % 200 == 0) {
+                  SlotSyncDebug.log("state side={} entity={} tick={} {}",
+                      SlotSyncDebug.side(livingEntity), livingEntity.getId(),
+                      livingEntity.tickCount, SlotSyncDebug.handlers(handler.getCurios()));
+                }
                 handler.clearCachedSlotModifiers();
                 handler.handleInvalidStacks();
                 Map<String, ICurioStacksHandler> curios = handler.getCurios();
@@ -824,6 +831,8 @@ public class CuriosEventHandler {
         syncable
             ? currentCurio.map(curio -> curio.writeSyncData(slotContext)).orElse(new CompoundTag())
             : new CompoundTag();
+    SlotSyncDebug.log("server send sync_stack entity={} slot={} index={} type={} item={}",
+        livingEntity.getId(), identifier, index, type, stack.getItem());
     PacketDistributor.sendToPlayersTrackingEntityAndSelf(
         livingEntity,
         new SPacketSyncStack(

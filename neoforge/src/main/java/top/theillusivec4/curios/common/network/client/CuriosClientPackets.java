@@ -45,6 +45,7 @@ import top.theillusivec4.curios.api.type.ICuriosMenu;
 import top.theillusivec4.curios.api.type.capability.ICurio;
 import top.theillusivec4.curios.api.type.inventory.ICurioStacksHandler;
 import top.theillusivec4.curios.client.gui.CuriosScreen;
+import top.theillusivec4.curios.common.SlotSyncDebug;
 import top.theillusivec4.curios.common.data.CuriosEntityManager;
 import top.theillusivec4.curios.common.data.CuriosSlotManager;
 import top.theillusivec4.curios.common.inventory.CurioStacksHandler;
@@ -183,8 +184,13 @@ public class CuriosClientPackets {
 
                     if (stacksHandler != null) {
                       stacksHandler.applySyncTag(entry.getValue());
+                    } else {
+                      SlotSyncDebug.log("client drop sync_modifiers entity={} slot={} (no handler)",
+                          data.entityId, id);
                     }
                   }
+                  SlotSyncDebug.log("client apply sync_modifiers entity={} {}", data.entityId,
+                      SlotSyncDebug.handlers(handler.getCurios()));
 
                   if (!data.updates.isEmpty()) {
                     NeoForge.EVENT_BUS.post(
@@ -202,7 +208,12 @@ public class CuriosClientPackets {
                     }
                   }
                 });
+      } else {
+        SlotSyncDebug.log("client drop sync_modifiers entity={} (no entity) {}", data.entityId,
+            SlotSyncDebug.tags(data.updates));
       }
+    } else {
+      SlotSyncDebug.log("client drop sync_modifiers entity={} (no level)", data.entityId);
     }
   }
 
@@ -230,13 +241,20 @@ public class CuriosClientPackets {
                     stacks.put(entry.getKey(), stacksHandler);
                   }
                   handler.setCurios(stacks);
+                  SlotSyncDebug.log("client apply sync_curios entity={} {}", data.entityId,
+                      SlotSyncDebug.handlers(stacks));
 
                   if (entity instanceof LocalPlayer localPlayer
                       && localPlayer.containerMenu instanceof ICuriosMenu curiosContainer) {
                     curiosContainer.resetSlots();
                   }
                 });
+      } else {
+        SlotSyncDebug.log("client drop sync_curios entity={} (no entity) {}", data.entityId,
+            SlotSyncDebug.tags(data.map));
       }
+    } else {
+      SlotSyncDebug.log("client drop sync_curios entity={} (no level)", data.entityId);
     }
   }
 
@@ -255,6 +273,12 @@ public class CuriosClientPackets {
       Entity entity = world.getEntity(data.entityId());
 
       if (entity instanceof LivingEntity livingEntity) {
+
+        if (CuriosApi.getCuriosInventory(livingEntity)
+            .flatMap(handler -> handler.getStacksHandler(data.curioId())).isEmpty()) {
+          SlotSyncDebug.log("client drop sync_stack entity={} slot={} index={} (no handler)",
+              data.entityId(), data.curioId(), data.slotId());
+        }
         CuriosApi.getCuriosInventory(livingEntity)
             .flatMap(handler -> handler.getStacksHandler(data.curioId()))
             .ifPresent(
@@ -281,13 +305,29 @@ public class CuriosClientPackets {
                                     compoundNBT));
                   }
 
+                  int size = cosmetic ? stacksHandler.getCosmeticStacks().getSlots()
+                      : stacksHandler.getStacks().getSlots();
+
+                  if (slot < 0 || slot >= size) {
+                    SlotSyncDebug.log(
+                        "client out-of-range sync_stack entity={} slot={} index={} size={} {}",
+                        data.entityId(), data.curioId(), slot, size,
+                        SlotSyncDebug.handlers(Map.of(data.curioId(), stacksHandler)));
+                  }
+
                   if (cosmetic) {
                     stacksHandler.getCosmeticStacks().setStackInSlot(slot, stack);
                   } else {
                     stacksHandler.getStacks().setStackInSlot(slot, stack);
                   }
                 });
+      } else {
+        SlotSyncDebug.log("client drop sync_stack entity={} slot={} index={} (no entity)",
+            data.entityId(), data.curioId(), data.slotId());
       }
+    } else {
+      SlotSyncDebug.log("client drop sync_stack entity={} slot={} index={} (no level)",
+          data.entityId(), data.curioId(), data.slotId());
     }
   }
 

@@ -49,6 +49,7 @@ import top.theillusivec4.curios.api.type.ISlotType;
 import top.theillusivec4.curios.api.type.capability.ICuriosItemHandler;
 import top.theillusivec4.curios.api.type.inventory.ICurioStacksHandler;
 import top.theillusivec4.curios.api.type.inventory.IDynamicStackHandler;
+import top.theillusivec4.curios.common.SlotSyncDebug;
 import top.theillusivec4.curios.common.inventory.CurioStacksHandler;
 
 public class CurioInventory implements INBTSerializable<CompoundTag> {
@@ -69,6 +70,9 @@ public class CurioInventory implements INBTSerializable<CompoundTag> {
     this.curiosItemHandler = curiosItemHandler;
     this.curios.clear();
     LivingEntity livingEntity = curiosItemHandler.getWearer();
+    SlotSyncDebug.log("init side={} entity={} tick={} saved={}",
+        SlotSyncDebug.side(livingEntity), livingEntity == null ? -1 : livingEntity.getId(),
+        livingEntity == null ? -1 : livingEntity.tickCount, this.markDeserialized);
 
     if (!this.markDeserialized) {
       SortedSet<ISlotType> sorted = new TreeSet<>(CuriosApi.getEntitySlots(livingEntity).values());

@@ -63,6 +63,7 @@ import top.theillusivec4.curios.api.type.capability.ICuriosItemHandler;
 import top.theillusivec4.curios.api.type.inventory.ICurioStacksHandler;
 import top.theillusivec4.curios.api.type.inventory.IDynamicStackHandler;
 import top.theillusivec4.curios.common.CuriosRegistry;
+import top.theillusivec4.curios.common.SlotSyncDebug;
 
 public class CurioInventoryCapability implements ICuriosItemHandler {
 
@@ -664,6 +665,9 @@ public class CurioInventoryCapability implements ICuriosItemHandler {
         for (AttributeModifier attributeModifier : entry.getValue()) {
           stacksHandler.getCachedModifiers().remove(attributeModifier);
         }
+        SlotSyncDebug.log("clear cached side={} entity={} tick={} slot={} cached={}",
+            SlotSyncDebug.side(this.livingEntity), this.livingEntity.getId(),
+            this.livingEntity.tickCount, id, stacksHandler.getCachedModifiers().size());
         stacksHandler.clearCachedModifiers();
       }
     }
@@ -703,6 +707,9 @@ public class CurioInventoryCapability implements ICuriosItemHandler {
   public void readTag(Tag nbt) {
 
     if (nbt instanceof CompoundTag tag) {
+      SlotSyncDebug.log("read tag side={} entity={} tick={}",
+          SlotSyncDebug.side(this.livingEntity), this.livingEntity.getId(),
+          this.livingEntity.tickCount);
       this.curioInventory.deserializeNBT(this.livingEntity.level().registryAccess(), tag);
     }
   }
