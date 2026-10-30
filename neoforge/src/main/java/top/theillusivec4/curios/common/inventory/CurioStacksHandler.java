@@ -44,7 +44,9 @@ import net.minecraft.world.entity.ai.attributes.AttributeMap;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.neoforged.fml.LogicalSide;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.common.util.LogicalSidedProvider;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.apache.commons.lang3.EnumUtils;
 import top.theillusivec4.curios.api.CuriosApi;
@@ -768,9 +770,14 @@ public class CurioStacksHandler implements ICurioStacksHandler {
 
     if (this.update) {
 
+      // Other mods may read slots from worker threads. Only the game thread resizes, so a read
+      // there cannot race the slot sync; the update stays pending for the game thread.
       if (this.itemHandler == null
           || !(this.itemHandler.getWearer() instanceof LivingEntity livingEntity)
-          || this.clearCacheTick == livingEntity.tickCount) {
+          || this.clearCacheTick == livingEntity.tickCount
+          || !(livingEntity.level().isClientSide()
+          ? LogicalSidedProvider.WORKQUEUE.get(LogicalSide.CLIENT) : livingEntity.getServer())
+          .isSameThread()) {
         return;
       }
       this.update = false;
