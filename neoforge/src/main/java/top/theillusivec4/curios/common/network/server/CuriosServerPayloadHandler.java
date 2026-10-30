@@ -49,6 +49,7 @@ import top.theillusivec4.curios.common.network.client.CPacketOpenVanilla;
 import top.theillusivec4.curios.common.network.client.CPacketPage;
 import top.theillusivec4.curios.common.network.client.CPacketToggleCosmetics;
 import top.theillusivec4.curios.common.network.client.CPacketToggleRender;
+import top.theillusivec4.curios.common.network.server.sync.SPacketSyncCurios;
 import top.theillusivec4.curios.common.network.server.sync.SPacketSyncRender;
 import top.theillusivec4.curios.common.network.server.sync.SPacketSyncStack;
 
@@ -136,6 +137,9 @@ public class CuriosServerPayloadHandler {
         ItemStack stack =
             player.isCreative() ? data.carried() : player.containerMenu.getCarried();
         player.containerMenu.setCarried(ItemStack.EMPTY);
+        // The client builds the menu from its own slots, so send it the server's slots first.
+        CuriosApi.getCuriosInventory(player).ifPresent(handler -> PacketDistributor.sendToPlayer(
+            serverPlayer, new SPacketSyncCurios(serverPlayer.getId(), handler.getCurios())));
         player.openMenu(new CuriosContainerProvider());
 
         if (!stack.isEmpty()) {

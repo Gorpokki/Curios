@@ -824,9 +824,11 @@ public class CuriosEventHandler {
         syncable
             ? currentCurio.map(curio -> curio.writeSyncData(slotContext)).orElse(new CompoundTag())
             : new CompoundTag();
+    // The packet is encoded later, so it takes a copy: a change to the slot's stack before then
+    // must not reach the client as a different item.
     PacketDistributor.sendToPlayersTrackingEntityAndSelf(
         livingEntity,
         new SPacketSyncStack(
-            livingEntity.getId(), identifier, index, stack, type.ordinal(), syncTag));
+            livingEntity.getId(), identifier, index, stack.copy(), type.ordinal(), syncTag));
   }
 }
