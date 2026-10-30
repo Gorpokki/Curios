@@ -77,8 +77,10 @@ import top.theillusivec4.curios.api.type.capability.ICuriosItemHandler;
 import top.theillusivec4.curios.api.type.inventory.ICurioStacksHandler;
 import top.theillusivec4.curios.api.type.inventory.IDynamicStackHandler;
 import top.theillusivec4.curios.common.inventory.CurioSlot;
+import top.theillusivec4.curios.common.inventory.CurioStacksHandler;
 import top.theillusivec4.curios.common.network.client.CPacketOpenCurios;
 import top.theillusivec4.curios.common.network.server.CuriosServerPayloadHandler;
+import top.theillusivec4.curios.common.network.server.sync.SPacketSyncCurios;
 import top.theillusivec4.curios.common.network.server.sync.SPacketSyncStack;
 
 /**
@@ -124,7 +126,8 @@ public class BackpackSlotSyncTests {
     ServerPlayer server = player(helper, "sync-a-server");
     ServerPlayer client = player(helper, "sync-a-client");
     fixture(server, client);
-    // The client never gets this modifier: it stays at the base three charm slots.
+    // The client misses this modifier's sync: it stays at the base three charm slots until the
+    // server sends it something more when Curios opens.
     curios(server).addTransientSlotModifier("charm", CHARM, 1,
         AttributeModifier.Operation.ADD_VALUE);
     step(helper, "A", WARMUP_TICKS, () -> {
@@ -148,6 +151,19 @@ public class BackpackSlotSyncTests {
       ClientboundContainerSetContentPacket contents =
           contents(helper, packets, open.getContainerId())
           .orElseThrow(() -> new GameTestAssertException("server sent no Curios menu contents"));
+
+      // What CuriosClientPackets.handle(SPacketSyncCurios) does on the client before the menu.
+      for (SPacketSyncCurios sync : payloads(packets, SPacketSyncCurios.class)) {
+        SPacketSyncCurios decoded = roundTrip(helper, SPacketSyncCurios.STREAM_CODEC, sync);
+        Map<String, ICurioStacksHandler> stacks = new LinkedHashMap<>();
+        decoded.map.forEach((id, tag) -> {
+          ICurioStacksHandler stacksHandler = new CurioStacksHandler(curios(client), id);
+          stacksHandler.applySyncTag(tag);
+          stacks.put(id, stacksHandler);
+        });
+        curios(client).setCurios(stacks);
+      }
+      record.put("client_charm_slots_at_menu", slots(client, "charm"));
       AbstractContainerMenu menu =
           open.getType().create(open.getContainerId(), client.getInventory());
       client.containerMenu = menu;
