@@ -24,31 +24,42 @@ jobs:
     env:
       QLTY_TELEMETRY: 'off'
     steps:
-      - name: Skip upstream sync scoring
-        if: ${{ startsWith(github.head_ref, 'sync/') }}
-        run: echo 'Skipped code quality scoring for an upstream sync.'
+      - id: scope
+        name: Decide whether this PR is scored
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [[ "$HEAD_REF" == sync/* && "$HEAD_REPO" == "$GITHUB_REPOSITORY" ]]; then
+            echo 'Skipped code quality scoring for an upstream sync.'
+            echo 'score=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'score=true' >> "$GITHUB_OUTPUT"
+          fi
       - name: Check out source with history
-        if: ${{ !startsWith(github.head_ref, 'sync/') }}
+        if: ${{ steps.scope.outputs.score == 'true' }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: Trust the workspace for git
-        if: ${{ !startsWith(github.head_ref, 'sync/') }}
+        if: ${{ steps.scope.outputs.score == 'true' }}
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       # The baseline records when this fork adopted the gate; score each PR against its merge base.
       - name: Pick the base to diff from
-        if: ${{ !startsWith(github.head_ref, 'sync/') }}
+        if: ${{ steps.scope.outputs.score == 'true' }}
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
           sha=$(tr -d '[:space:]' < .github/quality-baseline)
-          git merge-base --is-ancestor "$sha" HEAD
-          base=$(git merge-base "origin/$BASE_REF" HEAD)
+          if ! git merge-base --is-ancestor "$sha" HEAD; then
+            echo "::warning::Baseline $sha is not an ancestor of HEAD; diffing from the merge base instead."
+          fi
+          base=$(git merge-base "origin/$BASE_REF" HEAD) || { echo "::error::Cannot compute a merge base with origin/$BASE_REF."; exit 1; }
           echo "BASE=$base" >> "$GITHUB_ENV"
           echo "Diffing from $base"
       - name: Install Qlty CLI 0.652.0, poutine 1.1.6, jq 1.8.2 and zizmor 1.30.1
-        if: ${{ !startsWith(github.head_ref, 'sync/') }}
+        if: ${{ steps.scope.outputs.score == 'true' }}
         run: |
           cd "$RUNNER_TEMP"
           curl -fsSLo qlty.tar.xz https://github.com/qltysh/qlty/releases/download/v0.652.0/qlty-x86_64-unknown-linux-musl.tar.xz
@@ -65,34 +76,34 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           python3 -m pip install zizmor==1.30.1
       - name: Collect Qlty findings on changed code
-        if: ${{ !startsWith(github.head_ref, 'sync/') }}
+        if: ${{ steps.scope.outputs.score == 'true' }}
         run: qlty check --upstream "$BASE" --no-formatters --no-progress --level medium --no-fail --sarif > "$RUNNER_TEMP/qlty-check.sarif"
       - name: Gate Qlty findings on changed lines
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() }}
         uses: Gorpokki/minecraft-mod-actions/sarif-changed-lines@fca1c54653822990b918578721acade3c732513b # v1.1.0
         with:
           base: ${{ env.BASE }}
           sarif-file: ${{ runner.temp }}/qlty-check.sarif
       - name: Collect Qlty smells on changed code
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() }}
         run: qlty smells --upstream "$BASE" --quiet --sarif > "$RUNNER_TEMP/qlty-smells.sarif"
       - name: Gate Qlty smells on changed lines
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() }}
         uses: Gorpokki/minecraft-mod-actions/sarif-changed-lines@fca1c54653822990b918578721acade3c732513b # v1.1.0
         with:
           base: ${{ env.BASE }}
           sarif-file: ${{ runner.temp }}/qlty-smells.sarif
       - name: Collect workflow findings with zizmor
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() }}
         run: zizmor --no-progress --format sarif .github/workflows > "$RUNNER_TEMP/zizmor.sarif"
       - name: Gate zizmor findings on changed lines
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() }}
         uses: Gorpokki/minecraft-mod-actions/sarif-changed-lines@fca1c54653822990b918578721acade3c732513b # v1.1.0
         with:
           base: ${{ env.BASE }}
           sarif-file: ${{ runner.temp }}/zizmor.sarif
       - name: Fail new or worse functions above CCN 15 or cognitive complexity 15
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() }}
         uses: Gorpokki/minecraft-mod-actions/complexity-ratchet@fca1c54653822990b918578721acade3c732513b # v1.1.0
         with:
           ccn-max: '15'
@@ -106,29 +117,29 @@ jobs:
             *.cs
             *.java
       - name: Collect workflow supply-chain findings
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() }}
         run: poutine analyze_local . --quiet --format sarif > "$RUNNER_TEMP/poutine.sarif"
       - name: Gate poutine findings on changed lines
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() }}
         uses: Gorpokki/minecraft-mod-actions/sarif-changed-lines@fca1c54653822990b918578721acade3c732513b # v1.1.0
         with:
           base: ${{ env.BASE }}
           sarif-file: ${{ runner.temp }}/poutine.sarif
       - id: changed-js-ts
         name: List changed JavaScript and TypeScript files
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() }}
         run: |
           git diff --name-only --diff-filter=ACMR "$BASE"...HEAD -- '*.js' '*.jsx' '*.mjs' '*.cjs' '*.ts' '*.tsx' > "$RUNNER_TEMP/changed-js-ts.txt"
           if [ -s "$RUNNER_TEMP/changed-js-ts.txt" ]; then
             echo 'found=true' >> "$GITHUB_OUTPUT"
           fi
       - name: Use Node.js 24 for anti-slop
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() && steps.changed-js-ts.outputs.found == 'true' }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() && steps.changed-js-ts.outputs.found == 'true' }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
       - name: Fetch anti-slop at its pinned commit
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() && steps.changed-js-ts.outputs.found == 'true' }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() && steps.changed-js-ts.outputs.found == 'true' }}
         env:
           ANTI_SLOP_SHA: c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b
         run: |
@@ -136,11 +147,11 @@ jobs:
           git -C "$RUNNER_TEMP/anti-slop" fetch -q --depth 1 https://github.com/dmmulroy/anti-slop.git "$ANTI_SLOP_SHA"
           git -C "$RUNNER_TEMP/anti-slop" checkout -q FETCH_HEAD
       - name: Install anti-slop dependencies from its lockfile
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() && steps.changed-js-ts.outputs.found == 'true' }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() && steps.changed-js-ts.outputs.found == 'true' }}
         working-directory: ${{ runner.temp }}/anti-slop
         run: npx -y pnpm@10.33.0 install --frozen-lockfile --ignore-scripts
       - name: Lint changed JavaScript and TypeScript lines with anti-slop
-        if: ${{ !startsWith(github.head_ref, 'sync/') && !cancelled() && steps.changed-js-ts.outputs.found == 'true' }}
+        if: ${{ steps.scope.outputs.score == 'true' && !cancelled() && steps.changed-js-ts.outputs.found == 'true' }}
         run: |
           mapfile -t files < "$RUNNER_TEMP/changed-js-ts.txt"
           git diff -U0 --no-color --diff-filter=ACMR "$BASE"...HEAD -- "${files[@]}" \
