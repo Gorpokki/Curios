@@ -1,0 +1,5 @@
+skip:
+  - rule: github_action_from_unverified_creator_used
+    purl:
+      - pkg:githubactions/gorpokki/minecraft-mod-actions
+

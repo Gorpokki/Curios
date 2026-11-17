@@ -1,0 +1,18 @@
+# Pull-request quality job. See .github/workflows/code-quality.yml.
+config_version = "0"
+
+[[source]]
+name = "default"
+default = true
+
+[[plugin]]
+name = "ruff"
+version = "0.16.10"
+drivers = ["lint"]
+
+[[plugin]]
+name = "actionlint"
+version = "1.7.12"
+
+[[plugin]]
+name = "shellcheck"
