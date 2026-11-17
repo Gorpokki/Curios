@@ -15,8 +15,4 @@ name = "actionlint"
 version = "1.7.12"
 
 [[plugin]]
-name = "zizmor"
-version = "1.30.1"
-
-[[plugin]]
 name = "shellcheck"
