@@ -2,7 +2,7 @@
 # Add six loop checks: PERF101, PERF102, PERF401, PERF402, PERF403, PERF203. Not the whole PERF family.
 # No target-version is set, so ruff assumes Python 3.10 and PERF203 runs. On 3.11 or later ruff turns PERF203 off.
 # Name C419 and RUF017 too: Ruff 0.16.10 already runs them by default, and naming them keeps them on if that default changes. SIM111 is not named: ruff 0.16.10 remaps it to SIM110, and naming it prints a warning on every run.
-# Add C901 (mccabe), B006 and B023 (flake8-bugbear). Repo-wide hits: C901 32, B006 0, B023 106. The qlty job checks changed lines only, so existing hits do not fail it.
+# Add C901 (mccabe), B006 and B023 (flake8-bugbear). The qlty job checks changed lines only.
 # Add membership checks PLR1714 and FURB171. Name SIM118 too: Ruff already runs it by default, and naming it keeps it on if that default changes. PLR6201 is not added: it is preview-only, and preview mode also changes stable rules DTZ005, DTZ007, C420 and D301.
 # Add C420 for dict comprehensions with constant immutable values.
 [lint]
