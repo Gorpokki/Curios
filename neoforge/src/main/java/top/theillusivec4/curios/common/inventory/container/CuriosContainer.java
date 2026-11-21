@@ -58,6 +58,7 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 import top.theillusivec4.curios.api.CuriosApi;
+import top.theillusivec4.curios.api.SlotTypePreset;
 import top.theillusivec4.curios.api.type.ICuriosMenu;
 import top.theillusivec4.curios.api.type.capability.ICuriosItemHandler;
 import top.theillusivec4.curios.api.type.inventory.ICurioStacksHandler;
@@ -408,7 +409,7 @@ public class CuriosContainer extends RecipeBookMenu<RecipeInput, Recipe<RecipeIn
       } else if (index < 46 &&
           !CuriosApi.getItemStackSlots(itemstack, playerIn.level()).isEmpty()) {
 
-        if (!this.moveItemStackTo(itemstack1, 46, this.slots.size(), false)) {
+        if (!this.moveItemToSpecificSlotsOverCurioSlots(itemstack1)) {
           int page = this.findAvailableSlot(itemstack1);
 
           if (page != -1) {
@@ -591,5 +592,62 @@ public class CuriosContainer extends RecipeBookMenu<RecipeInput, Recipe<RecipeIn
 
   private record ProxySlot(int page, Slot slot) {
 
+  }
+
+
+  private boolean moveItemToSpecificSlotsOverCurioSlots(ItemStack stack) {
+    List<Slot> specificSlots = new ArrayList<>();
+    List<Slot> genericSlots = new ArrayList<>();
+
+    for (int i = 46; i < this.slots.size(); i++) {
+      Slot slot = this.slots.get(i);
+
+      if (slot instanceof CurioSlot curioSlot && curioSlot.mayPlace(stack)) {
+        if (SlotTypePreset.CURIO.getIdentifier().equals(curioSlot.getIdentifier())) {
+          genericSlots.add(slot);
+        } else {
+          specificSlots.add(slot);
+        }
+      }
+    }
+
+    if (this.moveToSlotList(stack, specificSlots)) {
+      return true;
+    }
+    return this.moveToSlotList(stack, genericSlots);
+  }
+
+  private boolean moveToSlotList(ItemStack stack, List<Slot> slots) {
+
+    for (Slot slot : slots) {
+
+      if (!slot.hasItem() && slot.mayPlace(stack)) {
+        slot.set(stack.copy());
+        stack.setCount(0);
+        slot.setChanged();
+        return true;
+      }
+      ItemStack existing = slot.getItem();
+
+      if (!existing.isEmpty() &&
+          ItemStack.isSameItemSameComponents(stack, existing)) {
+
+        int maxSize = Math.min(slot.getMaxStackSize(),
+                               stack.getMaxStackSize());
+
+        int transferable =
+            Math.min(stack.getCount(), maxSize - existing.getCount());
+
+        if (transferable > 0) {
+          existing.grow(transferable);
+          stack.shrink(transferable);
+          slot.setChanged();
+          if (stack.isEmpty()) {
+            return true;
+          }
+        }
+      }
+    }
+    return stack.isEmpty();
   }
 }
