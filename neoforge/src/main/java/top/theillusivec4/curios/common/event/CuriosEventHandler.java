@@ -41,6 +41,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.PlayerList;
 import net.minecraft.util.Mth;
@@ -62,10 +63,20 @@ import net.minecraft.world.item.enchantment.EnchantmentEffectComponents;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.level.ServerLevelAccessor;
+import net.minecraft.world.level.storage.loot.LootContext;
+import net.minecraft.world.level.storage.loot.LootParams;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParamSets;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.OnDatapackSyncEvent;
+import net.neoforged.neoforge.event.enchanting.EnchantedBlockLootEvent;
+import net.neoforged.neoforge.event.enchanting.EnchantedEntityLootEvent;
 import net.neoforged.neoforge.event.TagsUpdatedEvent;
 import net.neoforged.neoforge.event.entity.EntityEvent;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
@@ -102,6 +113,7 @@ import top.theillusivec4.curios.common.network.server.sync.SPacketSyncData;
 import top.theillusivec4.curios.common.network.server.sync.SPacketSyncModifiers;
 import top.theillusivec4.curios.common.network.server.sync.SPacketSyncStack;
 import top.theillusivec4.curios.common.network.server.sync.SPacketSyncStack.HandlerType;
+import top.theillusivec4.curios.mixin.CuriosUtilMixinHooks;
 
 public class CuriosEventHandler {
 
@@ -198,6 +210,57 @@ public class CuriosEventHandler {
       }
     }
     return false;
+  }
+
+  @SubscribeEvent
+  public void enchantedBlockLooted(EnchantedBlockLootEvent evt) {
+
+    if (evt.getEnchantment().is(Enchantments.FORTUNE)) {
+      Entity entity = evt.getEntity();
+      LevelAccessor level = evt.getLevel();
+
+      if (entity instanceof LivingEntity livingEntity && level instanceof ServerLevelAccessor serverLevelAccessor) {
+        CuriosApi.getCuriosInventory(livingEntity).ifPresent(curios -> {
+          LootParams lootparams = new LootParams.Builder(serverLevelAccessor.getLevel())
+              .withOptionalParameter(LootContextParams.THIS_ENTITY, livingEntity)
+              .withParameter(LootContextParams.BLOCK_STATE, evt.getState())
+              .withParameter(LootContextParams.ORIGIN, Vec3.atCenterOf(evt.getPos()))
+              .withParameter(LootContextParams.TOOL, evt.getTool())
+              .create(LootContextParamSets.BLOCK);
+          int fortuneLevel = curios.getFortuneLevel(new LootContext.Builder(lootparams).create(Optional.empty()));
+
+          if (fortuneLevel > 0) {
+            int enchantmentLevel = evt.getEnchantmentLevel();
+            evt.setEnchantmentLevel(enchantmentLevel + fortuneLevel);
+          }
+        });
+      }
+    }
+  }
+
+  @SubscribeEvent
+  public void enchantedEntityLooted(EnchantedEntityLootEvent evt) {
+
+    if (evt.getEnchantment().is(Enchantments.LOOTING)) {
+      Entity entity = evt.getAttacker();
+
+      if (entity instanceof LivingEntity livingEntity && livingEntity.level() instanceof ServerLevel serverLevel) {
+        CuriosApi.getCuriosInventory(livingEntity).ifPresent(curios -> {
+          LootParams lootparams = new LootParams.Builder(serverLevel)
+              .withOptionalParameter(LootContextParams.ATTACKING_ENTITY, livingEntity)
+              .withParameter(LootContextParams.THIS_ENTITY, evt.getEntity())
+              .withParameter(LootContextParams.DAMAGE_SOURCE, evt.getDamageSource())
+              .withParameter(LootContextParams.ORIGIN, Vec3.atCenterOf(evt.getEntity().getOnPos()))
+              .create(LootContextParamSets.ENTITY);
+          int lootingLevel = curios.getLootingLevel(new LootContext.Builder(lootparams).create(Optional.empty()));
+
+          if (lootingLevel > 0) {
+            int enchantmentLevel = evt.getEnchantmentLevel();
+            evt.setEnchantmentLevel(enchantmentLevel + lootingLevel);
+          }
+        });
+      }
+    }
   }
 
   @SubscribeEvent
@@ -833,11 +896,9 @@ public class CuriosEventHandler {
         syncable
             ? currentCurio.map(curio -> curio.writeSyncData(slotContext)).orElse(new CompoundTag())
             : new CompoundTag();
-    // The packet is encoded later, so it takes a copy: a change to the slot's stack before then
-    // must not reach the client as a different item.
     PacketDistributor.sendToPlayersTrackingEntityAndSelf(
         livingEntity,
         new SPacketSyncStack(
-            livingEntity.getId(), identifier, index, stack.copy(), type.ordinal(), syncTag));
+            livingEntity.getId(), identifier, index, stack, type.ordinal(), syncTag));
   }
 }
