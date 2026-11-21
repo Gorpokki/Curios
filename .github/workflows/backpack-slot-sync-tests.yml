@@ -31,7 +31,7 @@ jobs:
           EOF
       - name: Run GameTests
         shell: bash
-        run: ./gradlew --no-daemon --init-script .github/pin-gradle-plugins.gradle :neoforge:runGameTestServer -Pneoforge_version="$NEOFORGE" -Pbackpack_libs="$RUNNER_TEMP/backpack-libs" 2>&1 | tee gametest.log
+        run: ./gradlew --no-daemon :neoforge:runGameTestServer -Pneoforge_version="$NEOFORGE" -Pbackpack_libs="$RUNNER_TEMP/backpack-libs" 2>&1 | tee gametest.log
       - name: Summary
         if: always()
         shell: bash
